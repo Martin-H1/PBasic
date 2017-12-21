@@ -1,0 +1,145 @@
+' ==============================================================================
+'
+'   File...... Gripper.BSE
+'   Purpose... Gripper control module for multi-bank programs
+'   Author.... Martin Heermance
+'   E-mail.... mheermance@gmail.com
+'   Started... 2011 February
+'   Updated... 2011 February 26th
+'
+'   {$STAMP BS2e}
+'   {$PBASIC 2.5}
+'
+' ==============================================================================
+
+
+' ------------------------------------------------------------------------------
+' Program Description
+' ------------------------------------------------------------------------------
+
+
+' ------------------------------------------------------------------------------
+' Revision History
+' ------------------------------------------------------------------------------
+' 2011-02-26 Split out code from the MotorsAndSensors module.
+
+' ------------------------------------------------------------------------------
+' I/O Definitions
+' ------------------------------------------------------------------------------
+
+Gripper         PIN     6                     ' Pin for gripper servo
+
+' ------------------------------------------------------------------------------
+' Constants
+' ------------------------------------------------------------------------------
+
+'--------[Calibration Constants, must be adjusted for your specific robot]------
+
+GripperOpened   CON     500                   ' PULSOUT pulse width to open gripper servo
+GripperClosed   CON     960                   ' PULSOUT pulse width to close gripper servo
+
+PingCenter      CON     645                   ' head servo center
+
+'---------[Other Global Constants]----------------------------------------------
+
+
+' ------------------------------------------------------------------------------
+' Variables - for simplicty I use exactly the same variables in all modules.
+' ------------------------------------------------------------------------------
+
+' General purpose volatile variables which are modified by subroutines or tasks
+
+' ACC is an accumulator, branch offset, and task dispatch register
+ACC             VAR     Word
+Task            VAR     ACC.LOWBYTE           ' Alias for task dispatching
+TaskBank        VAR     Task.HIGHNIB          ' Alias to access bank
+TaskIndex       VAR     Task.LOWNIB           ' Alias to access index
+
+' Loop index variables and for argument passing.
+X               VAR     Word
+Y               VAR     Word
+Z               VAR     Word
+MinDistance     VAR     Z.LOWBYTE             ' Alias for distance constraint.
+MaxDistance     VAR     Z.HIGHBYTE            ' Alias for distance constraint.
+
+' State variables which are modified to reflect changes of robot state.
+SP              VAR     Byte                  ' Scratch pad pointer
+Prev            VAR     Bit(2)                ' Previous readings from encoders.
+New             VAR     Bit(2)                ' Current readings from encoders.
+Dir             VAR     Bit(2)                ' Wheel directions (FWD or BAK).
+Side            VAR     Bit                   ' Side index (RIGHT or LEFT).
+Opp             VAR     Bit                   ' Index to the other side (saves code).
+Dist            VAR     Byte(2)               ' Distance for each wheel to travel.
+Counts          VAR     Byte(2)               ' Encoder pulse countdown for each wheel.
+DirErr          VAR     Word                  ' Current directional error in brads and 1/256 brads.
+Heading         VAR     Byte                  ' Robot compass heading
+Theta           VAR     Byte                  ' Computed Heading
+PingAngle       VAR     Byte                  ' Ping servo compass angle in brads
+Position        VAR     Byte(2)               ' X, Y position of robot.
+
+' Alias to allow imported code to compile.
+Pulse           VAR     ACC.LOWBYTE           ' Current unscaled, unnulled servo pulse value.
+Arg             VAR     Y.LOWBYTE             ' Requested travel or turn amount.
+Veloc           VAR     Y.HIGHBYTE.LOWNIB     ' Requested maximum velocity.
+
+' ------------------------------------------------------------------------------
+' EEPROM Data
+' ------------------------------------------------------------------------------
+
+
+' ------------------------------------------------------------------------------
+' Initialization
+' ------------------------------------------------------------------------------
+
+ModuleEntry:
+  DEBUG "Gripper entry point, TaskIndex = ", DEC TaskIndex, " SP = ", DEC SP, CR
+  ' Save any variables on scratchpad here.
+  ON TaskIndex GOSUB Initialize, GripperUp, GripperDown,
+                     GripperOpen, GripperClose, GripperRotate
+  ' Restore variables here.
+  DEBUG "Return from gosub SP = ", DEC SP, CR
+  SP = SP - 1                                 ' Pull the Task off and return.
+  GET SP, Task
+  DEBUG "Sensor exit point, X=", DEC X, " Task=", HEX Task, " SP=", DEC SP, CR
+  RUN TaskBank
+
+' ------------------------------------------------------------------------------
+' Program Code
+' ------------------------------------------------------------------------------
+
+
+' ------------------------------------------------------------------------------
+' Subroutines
+' ------------------------------------------------------------------------------
+
+Initialize:
+  RETURN
+
+GripperUp:
+  RETURN
+
+GripperDown:
+  RETURN
+
+' GripperOpen - pulse out in a loop until we're sure the gripper is opened.
+' Inputs:
+' Outputs:
+GripperOpen:
+  FOR X = 1 TO 25
+    PULSOUT Gripper, GripperOpened
+    PAUSE 20
+  NEXT
+  RETURN
+
+' GripperClose - pulse out in a loop until we're sure the gripper is closed.
+' Inputs:
+' Outputs:
+GripperClose:
+  FOR X = 1 TO 25
+    PULSOUT Gripper, GripperClosed
+    PAUSE 20
+  NEXT
+  RETURN
+
+GripperRotate:
+  RETURN

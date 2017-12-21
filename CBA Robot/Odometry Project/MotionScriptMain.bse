@@ -1,0 +1,331 @@
+' ==============================================================================
+'
+'   File...... MotionScriptMain.BSE
+'   Purpose... CBA Motion script driver
+'   Author.... Martin Heermance
+'   E-mail.... mheermance@gmail.com
+'   Started... 2011 Feb 15
+'   Updated... 2011 Feb 26
+'
+'   {$STAMP BS2e, MotorsAndSensors.BSE, Gripper.BSE}
+'   {$PBASIC 2.5}
+'
+' ==============================================================================
+
+
+' ------------------------------------------------------------------------------
+' Program Description
+'
+' This is the main module for the motion script program.  It uses the multi-bank
+' capability of the BS2e with motor and sensor routines already written.  The core
+' program reads byte codes from EEPROM and dispatches to the task handler.
+' ------------------------------------------------------------------------------
+
+' ------------------------------------------------------------------------------
+' Revision History
+' ------------------------------------------------------------------------------
+' 2011-02-22 Initial creation.
+' 2011-02-26 Moved gripper tasks to bank 2 and added bank 1 tasks.
+' 2011-02-27 Changed HeadAngle to PingAngle as it is more descriptive
+
+' ------------------------------------------------------------------------------
+' I/O Definitions
+' ------------------------------------------------------------------------------
+
+COM_SPEED       CON      84    ' 9600 baudnon-inverted.
+LCD             PIN       1    ' LCD output
+
+' ------------------------------------------------------------------------------
+' Constants
+' ------------------------------------------------------------------------------
+
+' Main bank tasks are $00 - $ff as they are called as a return and are always
+' at zero in the scratchpad.
+
+TaskInitialize0 CON     $00
+TaskMain        CON     $01
+
+' Program stream pseudo tasks which are placed in the command stream.
+TaskHalt        CON     $02
+TaskPause       CON     $03
+TaskRepeat      CON     $04
+
+' Library bank program tasks are $0-$f with the upper nibble indicating the bank.
+
+TaskInitialize1 CON     $10    ' Bank 1 program tasks
+TaskReadLFM     CON     $11
+TaskReadBarcode CON     $12
+TaskPing        CON     $13
+TaskPingAngle   CON     $14
+TaskPingSweep   CON     $15
+TaskMove        CON     $16
+TaskMoveXY      CON     $17
+TaskTurn        CON     $18
+TaskTurnCompass CON     $19
+TaskRight       CON     $1A
+TaskLeft        CON     $1B
+TaskStop        CON     $1C
+
+TaskInitialize2 CON     $20    ' Bank 2 program tasks
+TaskGripperUp   CON     $21
+TaskGripperDown CON     $22
+TaskGripperOpen CON     $23
+TaskGripperClose  CON   $24
+TaskGripperRotate CON   $25
+
+NORTH           CON     0
+EAST            CON     64
+SOUTH           CON     -128
+WEST            CON     -64
+
+XPOS            CON     0
+YPOS            CON     1
+
+NegMask8        CON     $FF00  ' For 8-bit negative to 16-bits
+
+' ------------------------------------------------------------------------------
+' Variables - for simplicty I use exactly the same variables in all modules.
+' ------------------------------------------------------------------------------
+
+' General purpose volatile variables which are modified by subroutines or tasks
+
+' ACC is an accumulator, branch offset, and task dispatch register
+ACC             VAR     Word
+Task            VAR     ACC.LOWBYTE             ' Alias for task dispatching
+TaskBank        VAR     Task.HIGHNIB            ' Alias to access bank
+TaskIndex       VAR     Task.LOWNIB             ' Alias to access index
+
+' Loop index variables and for argument passing.
+X               VAR     Word
+Y               VAR     Word
+Z               VAR     Word
+MinDistance     VAR     Z.LOWBYTE               ' Alias for distance constraint.
+MaxDistance     VAR     Z.HIGHBYTE              ' Alias for distance constraint.
+
+' State variables which are modified to reflect changes of robot state.
+SP              VAR     Byte                    ' Scratch pad pointer
+Prev            VAR     Bit(2)                  ' Previous readings from encoders.
+New             VAR     Bit(2)                  ' Current readings from encoders.
+Dir             VAR     Bit(2)                  ' Wheel directions (FWD or BAK).
+Side            VAR     Bit                     ' Side index (RIGHT or LEFT).
+Opp             VAR     Bit                     ' Index to the other side (saves code).
+Dist            VAR     Byte(2)                 ' Distance for each wheel to travel.
+Counts          VAR     Byte(2)                 ' Encoder pulse countdown for each wheel.
+DirErr          VAR     Word                    ' Directional error in brads and 1/256 brads.
+Heading         VAR     Byte                    ' Robot compass heading
+Theta           VAR     Byte                    ' Computed Heading
+PingAngle       VAR     Byte                    ' Ping servo compass angle in brads
+Position        VAR     Byte(2)                 ' X, Y position of robot.
+
+' Alias to allow imported code to compile using my standard variables.
+Pulse           VAR     ACC.LOWBYTE             ' Current unscaled, unnulled servo pulse value.
+Arg             VAR     Y.LOWBYTE               ' Requested travel or turn amount.
+Veloc           VAR     Y.HIGHBYTE.LOWNIB       ' Requested maximum velocity.
+
+' ------------------------------------------------------------------------------
+' EEPROM Data
+' ------------------------------------------------------------------------------
+
+' This byte stream represents a motion script for the robot.
+
+Commands DATA TaskTurnCompass, NORTH
+         DATA TaskPause,       255
+         DATA TaskMoveXY,  60, 60
+         DATA TaskMoveXY,  60, 70
+         DATA TaskMoveXY, -60, 70
+         DATA TaskMoveXY, -60, 60
+         DATA TaskMoveXY,   0,  0
+         DATA TaskTurnCompass, NORTH
+         DATA TaskHalt
+
+' ------------------------------------------------------------------------------
+' ModuleEntry - called on power, rest, or RUN return from another module.
+' ------------------------------------------------------------------------------
+
+ModuleEntry:
+  DEBUG "Module Entry SP = ", DEC SP, CR
+  GET SP, Task                          ' get return task
+  BRANCH Task, [Initialize, Main]
+
+' All tasks follow a similar pattern.
+' Place return task in the scratch pad
+' Place destination task in the scratch pad
+' Place arguments in registers or scratch pad
+' Run external module task
+' External call will return to ModuleEntry which dispatches to return task
+' Return task evaluates return values in registers Or scratch pad for next action
+
+' After power up or reset the scratch pad has zero, so is task is called once.
+Initialize:
+  OUTPUT LCD                            ' make LCD pin an output
+  HIGH   LCD                            ' this is the steady state for non-inverted
+  PAUSE 1000                            ' allow to stabilize
+  Position(XPOS) = 0
+  Position(YPOS) = 0
+  SEROUT LCD, COM_SPEED,                ' clear the LCD and add welcome message
+    ["?f?y0?x00Welcome"]
+  PUT SP, Word 0                        ' Initialize the command counter.
+  SP = SP + 2                           ' Reserve space for the counter.
+  Task = TaskInitialize1                ' Initialize motors and sensors.
+  GOSUB RunTask
+
+' ------------------------------------------------------------------------------
+' Program Code
+' ------------------------------------------------------------------------------
+
+' The program is a parser to read commonds from the user and invoke code to
+' act on those commands.  The general flow is wait for a trigger and then
+' get a command and options.
+
+' Main - Initial task of the parser.
+Main:
+  ACC = Heading
+  GOSUB SignExtendACC
+  SEROUT LCD, COM_SPEED,                ' Print heading and X position.
+    ["?fH=", SDEC ACC, " X="]
+
+  ACC = Position(XPOS)
+  GOSUB SignExtendACC
+  SEROUT LCD, COM_SPEED,                ' Print heading and X position.
+    [SDEC ACC, " Y="]
+  ACC = Position(YPOS)
+  GOSUB SignExtendACC
+  SEROUT LCD, COM_SPEED,
+    [SDEC ACC, "?x00?y1"]               ' Print Y and go to second line
+  GOSUB ReadByte                        ' Get a command and advance counter
+  Task = Z.LOWBYTE                      ' Read a task command.
+
+  ' Set some parameters to frequently used values.
+  Veloc = 15                            ' Max speed
+
+  ' Select on the task, some tasks have command operands.
+  SELECT Task
+  ' Bank 1 program stream psuedo tasks
+  CASE TaskPause
+    GOSUB ReadByte
+    SEROUT LCD, COM_SPEED, ["Pause ", SDEC Z, "ms"]
+    PAUSE Z.LOWBYTE
+    GOTO Main
+
+  CASE TaskRepeat
+    SEROUT LCD, COM_SPEED, ["Repeat"]
+    GOSUB ReadByte                      ' Get the repeat from index.
+    PUT 0, Z                            ' Set the index.
+    GOTO Main
+
+  CASE TaskHalt
+    SEROUT LCD, COM_SPEED, ["Halted"]
+    GOTO MainEnd
+
+  ' Bank 2 motion and sensor tasks
+  CASE TaskMove
+    GOSUB ReadByte                      ' Get a the amount to move.
+    SEROUT LCD, COM_SPEED, ["Move ", SDEC Z]
+    Arg = Z.LOWBYTE
+    MinDistance = 5                     ' Get no closer than five inches
+    MaxDistance = 0                     ' No max constraint.
+    IF (ARG.BIT7) THEN                  ' If we're backing up, turn off PING)))
+      MinDistance = 0
+    ENDIF
+
+  CASE TaskMoveXY
+    GOSUB ReadByte                      ' Get the X coordinate.
+    X = Z
+    GOSUB ReadByte                      ' Get the Y coordinate.
+    Y = Z
+    SEROUT LCD, COM_SPEED, ["Goto X=", SDEC X, " Y=", SDEC Y]
+    MinDistance = 5                     ' Get no closer than five inches
+    MaxDistance = 0                     ' No max constraint.
+
+  CASE TaskTurn
+    GOSUB ReadByte                      ' Get the turn angle.
+    Arg = Z.LOWBYTE
+    SEROUT LCD, COM_SPEED, ["Turn ", SDEC Z]
+    MinDistance = 5                     ' Get no closer than five inches
+    MaxDistance = 0                     ' No max constraint.
+
+  CASE TaskTurnCompass
+    GOSUB ReadByte                      ' Get the desired heading.
+    Arg = Z.LOWBYTE
+    SEROUT LCD, COM_SPEED, ["TurnCompass ", SDEC Z]
+
+  CASE TaskRight
+    GOSUB ReadByte                      ' Get a the amount to turn.
+    Arg = Z.LOWBYTE                     ' number of ep units to rotate.
+    SEROUT LCD, COM_SPEED, ["Right ", SDEC Z]
+    MinDistance = 5                     ' Get no closer than five inches
+    MaxDistance = 0                     ' No max constraint.
+
+  CASE TaskLeft
+    GOSUB ReadByte                      ' Get the number of ep units to rotate.
+    Arg = Z.LOWBYTE
+    SEROUT LCD, COM_SPEED, ["Left ", SDEC Z]
+    MinDistance = 5                     ' Get no closer than five inches
+    MaxDistance = 0                     ' No max constraint.
+
+  ' Bank 2 gripper commands
+  CASE TaskGripperUp
+    SEROUT LCD, COM_SPEED, ["Gripper Up"]
+
+  CASE TaskGripperDown
+    SEROUT LCD, COM_SPEED, ["Gripper Down"]
+
+  CASE TaskGripperOpen
+    SEROUT LCD, COM_SPEED, ["Gripper Open"]
+
+  CASE TaskGripperClose
+    SEROUT LCD, COM_SPEED, ["Gripper Close"]
+
+  CASE TaskGripperRotate
+    GOSUB ReadByte                      ' Get the number of ep units to rotate.
+    Arg = Z.LOWBYTE
+    SEROUT LCD, COM_SPEED, ["GRotate ", SDEC Z]
+
+  CASE ELSE
+    SEROUT LCD, COM_SPEED, ["Invalid Command"]
+    GOTO Main
+  ENDSELECT
+
+  ' Run the task in the external bank.
+RunTask:
+  PUT SP, TaskMain                      ' store return task at SP
+  SP = SP + 1                           ' Advance SP to next free cell
+  RUN TaskBank                          ' run external code
+
+' The halted state of the motion script.
+MainEnd:
+  END
+
+' ------------------------------------------------------------------------------
+' Subroutines
+' ------------------------------------------------------------------------------
+
+' ReadByte - reads a byte from the commands and advances the byte pointer.
+' Inputs:
+'   SP(0) - Current index into commands.
+' Outputs:
+'   Z.LOWBYTE - the command byte.
+'   SP(0) - advanced to next byte.
+ReadByte:
+    GET 0, Word Z                       ' Put SP(0) into Z.
+    PUT 0, Word (Z + 1)                 ' Advance the index to next command.
+    READ Commands + Z, Z.LOWBYTE        ' Get the command byte into Z
+    Z.HIGHBYTE = 0                      ' Get rid of junk in the high byte.
+    IF (Z.LOWBYTE.BIT7 = 1) THEN        ' Sign extend.
+      Z = Z | NegMask8
+    ENDIF
+  RETURN
+
+' SignExtendACC - converts a signed byte in ACC into a signed word.
+' Inputs:
+'   ACC.LOWBYTE - the 8 bit value
+' Outputs:
+'   ACC - the 16 bit signed quantity.
+SignExtendACC:
+  ACC.HIGHBYTE = 0
+  IF (ACC.BIT7 = 1) THEN
+    ACC = ACC | NegMask8
+  ELSE
+    ACC = ACC
+  ENDIF
+  RETURN
