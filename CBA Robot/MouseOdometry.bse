@@ -1,5 +1,5 @@
 ' =========================================================================
-'   File...... MouseOdometry.BS2
+'   File...... MouseOdometry.BSE
 '   Purpose... Compares the mouse sensor against the wheel encoders.
 '   Author.... Martin Heermance
 '   E-mail.... mheermance@gmail.com
@@ -22,36 +22,27 @@
 
 ' -----[ Configuration Constants ]-----------------------------------------
 
-#DEFINE USE_500DPI     ' Comment this out to use 1000 dpi, instead of 500 dpi.
-#DEFINE USE_DEBUG      ' Comment this out to use 38400 baud, instead of DEBUG.
-#DEFINE DO_XYQ_ONLY    ' Comment this out to dump all the registers, not just X,Y,Q.
 
 ' -----[ I/O Definitions ]-------------------------------------------------
 LCD   PIN 9            ' LCD OUTPUT
 sclk  PIN 10           ' Serial clock pin to mouse sensor.
 sdio  PIN 11           ' Serial data I/O pin to mouse sensor.
-RMotor PIN 12          ' Pin for right servo
-LMotor PIN 13          ' Pin for left servo
+RMotor   PIN 12        ' Pin for right servo
+LMotor   PIN 13        ' Pin for left servo
+REncoder PIN 14        ' Pin for right wheel encoder
+LEncoder PIN 15        ' Pin for left wheel encoder
 
 ' -----[ Constants ]-------------------------------------------------------
 
 COM_SPEED CON 84       ' 9600 baud non-inverted.
 
-' Set the baud rate to 9600 if using DEBUG; else set it to 38400.
+' Set the baud rate to 9600
 
-#IF (USING_DEBUG) #THEN
-  #SELECT $STAMP
-    #CASE BS2, BS2E, BS2PE : baud CON 84
-    #CASE BS2SX, BS2P : baud CON 240
-    #CASE BS2PX : baud CON 396
-  #ENDSELECT
-#ELSE
-  #SELECT $stamp
-    #CASE BS2, BS2E, BS2PE : baud CON 6
-    #CASE BS2SX, BS2P : baud CON 45
-    #CASE BS2PX : baud CON 121
-  #ENDSELECT
-#ENDIF
+#SELECT $STAMP
+  #CASE BS2, BS2E, BS2PE : baud CON 84
+  #CASE BS2SX, BS2P : baud CON 240
+  #CASE BS2PX : baud CON 396
+#ENDSELECT
 
 ' Mouse sensor register addresses.
 
@@ -66,8 +57,8 @@ CHNG  CON $80          ' Bitmask for STAT to see if position changed.
 OFLOW CON $18          ' Bitmask for STAT to detect X/Y overflow.
 NEG   CON $80          ' Sign bit for DX and DY.
 
-MStop   CON 750     'Pulse width for the servos while stopped
-Speed100  CON 250   'This amount added or subtracted from stop makes the servos turn full speed
+LStop CON 750          ' Pulse width for the servos while stopped
+RStop CON 744
 
 ' -----[ Variables ]---------------------------------------------------------
 
@@ -88,6 +79,7 @@ LastLE VAR Bit         ' Storage of last encoder reading
 LastRE VAR Bit
 LCount VAR Byte        ' Storage of total accumulation of encoder counts
 RCount VAR Byte
+PD     VAR Word        ' Pulse delta during ramp.
 PulseWidthRt VAR Word  ' Variables for pulse widths to servos
 PulseWidthLt VAR Word  ' these hold the duration value
 
@@ -98,133 +90,154 @@ LastRE = IN14          ' Same for Right
 
 ' Initialize clock
 LOW sclk
-
 PAUSE 100              ' Wait for mouse sensor to come out of reset.
 
-#IF (USE_500DPI) #THEN
-  addr = CONF          ' Change resolution to 500 dpi.
-  dat = LORES
-  GOSUB WriteAddr
-#ENDIF
+addr = CONF            ' Change resolution to 500 dpi.
+dat = LORES
+GOSUB WriteAddr
 
-#IF (USE_DEBUG) #THEN
-  SEROUT LCD, COM_SPEED, ["?f"] ' Clear the screen if using DEBUG window.
-#ENDIF
+SEROUT LCD, COM_SPEED, ["?f"] ' Clear the screen.
 
 ' Main program loop.
+Main:
+  GOSUB Forward
+  GOSUB Backward
+  END
 
+Monitor:
 DO
-  #IF (DO_XYQ_ONLY) #THEN
-    GOSUB DumpXYQ      'Use this to monitor X, Y, and Quality only.
-  #ELSE
-    GOSUB DumpALL      'Use this to dump all registers.
-  #ENDIF
+  GOSUB ReadXYQ
+  GOSUB DumpXYQ      'Use this to monitor X, Y, and Quality only.
 LOOP
 
 ' -----[ Subroutines ]-------------------------------------------------------
 
-' DumpXYQ outputs X, Y, and Quality data to the programming port, for use with
-' either DEBUG or an external program.
-
+' DumpXYQ outputs X, Y, and Quality data to the LCD
 DumpXYQ:
+  SEROUT LCD, COM_SPEED, ["?fx ", SDEC5 x, " y ", SDEC5 y, " quality ", DEC3 q]
+  IF (ovfl) THEN
+    ovfl = ovfl - 1
+    SEROUT LCD, COM_SPEED, [" OVERFLOW"]
+  ENDIF
+  SEROUT LCD, COM_SPEED, ["?l"]
+  RETURN
 
+' ReadXYQ reads three registers and updates those variables
+'   Outputs: x, y, ovfl
+ReadXYQ:
   addr = STAT
   GOSUB ReadAddr
-  #IF (USE_DEBUG) #THEN
-    IF (dat & CHNG = 0) THEN
-      SEROUT LCD, COM_SPEED, ["?fx ", SDEC5 x, " y ", SDEC5 y, " quality ", DEC3 q]
-      RETURN
-    ELSEIF (dat & OFLOW) THEN
-      ovfl = 10
-    ENDIF
-  #ELSE
-    IF (dat & CHNG = 0) THEN
-      SEROUT 16, baud, ["x", SDEC x, " y", SDEC y, " q", DEC q, CR]
-      RETURN
-    ELSEIF (dat & OFLOW) THEN
-      SEROUT 16, baud, ["x", SDEC x, " y", SDEC y, " q999", CR]
-    ENDIF
-  #ENDIF
+
+  IF (dat & CHNG = 0) THEN
+    RETURN
+  ELSEIF (dat & OFLOW) THEN
+    ovfl = 10
+  ENDIF
+
   addr = DX
   GOSUB ReadAddr
   x = x + dat
+  ' sign extend if negative
   IF (dat & NEG) THEN x = x + $ff00
+
   addr = DY
   GOSUB ReadAddr
   y = y + dat
+  ' sign extend if negative
   IF (dat & NEG) THEN y = y + $ff00
   addr = QLTY
   GOSUB ReadAddr
   q = dat
-  #IF (USE_DEBUG) #THEN
-    SEROUT LCD, COM_SPEED, ["?fx: ", SDEC5 x, " y: ", SDEC5 y, " quality: ", DEC3 q]
-    IF (ovfl) THEN
-      ovfl = ovfl - 1
-      SEROUT LCD, COM_SPEED, [" OVERFLOW"]
-    ENDIF
-    SEROUT LCD, COM_SPEED, ["?l"]
-  #ELSE
-    SEROUT 16, baud, ["x", SDEC x, " y", SDEC y, " q", DEC q, CR]
-  #ENDIF
-  RETURN
-
-' DumpAll outputs the contents of all the sensor chip's registers.
-
-DumpAll:
-
-  SEROUT 16, baud, [HOME]
-  FOR addr = 0 TO $7f
-    GOSUB ReadAddr
-    IF (addr & 15 = 0) THEN SEROUT 16, baud, [HEX2 addr, ": "]
-    SEROUT 16, baud, [HEX2 dat]
-    IF (addr & 15 = 15) THEN
-      SEROUT 16, baud, [CR]
-    ELSEIF (addr & 7 = 7) THEN
-      SEROUT 16, baud, ["   "]
-    ELSE
-      SEROUT 16, baud, [" "]
-    ENDIF
-  NEXT
-  SEROUT 16, baud, [CR]
   RETURN
 
 ' ReadAddr reads a sensor chip register.
 '   Inputs:  addr = address ($00 - $7F) to read.
 '   Outputs: dat  = contents of the addressed register.
-
 ReadAddr:
   SHIFTOUT sdio, sclk, MSBFIRST, [addr\8]
   INPUT sdio
   SHIFTIN sdio, sclk, MSBPOST, [dat\8]
   RETURN
 
-WriteAddr:
 ' WriteAddr writes data to a sensor chip register.
 '   Inputs:  addr = address ($00 - $7F) to write.
 '            dat  = data to write to the addressed register.
+WriteAddr:
   SHIFTOUT sdio, sclk, MSBFIRST, [addr|$80\8, dat\8]
   RETURN
 
-Backward:
-  PulseWidthLt = MStop - Speed100  ' Set Speed to stop speed plus full speed
-  PulseWidthRt = MStop + Speed100  ' Same as above but minus for right servo to go forward
-  GOTO Move
-
+' Moves forward 150 encoder counts
 Forward:
-  PulseWidthLt = MStop + Speed100  ' Set Speed to stop speed plus full speed
-  PulseWidthRt = MStop - Speed100  ' Same as above but minus for right servo to go forward
-  GOTO Move
+  GOSUB Halt
+  PD = 5
+  GOSUB Ramp
+  GOSUB Move
+  PD = -5
+  GOSUB Ramp
+  GOSUB Halt
+  RETURN
 
-Move:
-  FOR j = 1 TO 150                 ' Normal servo pulse loop
+' Moves backward 150 encoder counts
+Backward:
+  GOSUB Halt
+  PD = -5
+  GOSUB Ramp
+  GOSUB Move
+  PD = 5
+  GOSUB Ramp
+  GOSUB Halt
+  RETURN
+
+' Ramp performs the ramp up/down phase of a trapazoidal ramp.
+' Inputs: PulseWidthLt, PulseWidthRt, PD
+' Outputs: PulseWidthLt, PulseWidthRt, LCount, RCount
+Ramp:
+  LCount = 0
+  RCount = 0
+  FOR j = 1 TO 25                  ' Normal servo pulse loop
+    PulseWidthLt = PulseWidthLt + PD ' increment speed for each iteration.
+    PulseWidthRt = PulseWidthRt - PD ' Same as above but minus for right servo
     GOSUB ReadEncoders             ' Read the wheel encoders
     IF LCount <= RCount THEN PULSOUT Lmotor, PulseWidthLt  ' Send pulse TO left
     IF RCount <= LCount THEN PULSOUT Rmotor, PulseWidthRt  ' Send pulse TO right
-    PAUSE 15                       ' Pause until next pulse is needed
+    GOSUB ReadXYQ
+    'PAUSE 15                       ' Pause until next pulse is needed
   NEXT
+  GOSUB DumpXYQ
   RETURN
 
-' *** Subroutine for reading the encoders ***
+' Move performs the constant movement phase of a trapazoidal ramp.
+' Inputs: PulseWidthLt, PulseWidthRt
+' Outputs: LCount, RCount
+Move:
+  LCount = 0
+  RCount = 0
+  FOR j = 1 TO 25                  ' Normal servo pulse loop
+    GOSUB ReadEncoders             ' Read the wheel encoders
+    IF LCount <= RCount THEN PULSOUT Lmotor, PulseWidthLt  ' Send pulse TO left
+    IF RCount <= LCount THEN PULSOUT Rmotor, PulseWidthRt  ' Send pulse TO right
+    GOSUB ReadXYQ
+    'PAUSE 15                       ' Pause until next pulse is needed
+  NEXT
+  GOSUB DumpXYQ
+  RETURN
+
+' Halts the robot by sending MStop to both servos
+Halt:
+  PulseWidthLt = LStop
+  PulseWidthRt = RStop
+  FOR j = 1 TO 10                 ' Normal servo pulse loop
+    PULSOUT Lmotor, PulseWidthLt  ' Send pulse TO left
+    PULSOUT Rmotor, PulseWidthRt  ' Send pulse TO right
+    GOSUB ReadXYQ
+    PAUSE 15                      ' Pause until next pulse is needed
+  NEXT
+  GOSUB DumpXYQ
+  RETURN
+
+' ReadEncoders does exactly what it says on the tin.
+' Inputs: LastRE, LastLE, LCount, RCount
+' Outputs: LastRE, LastLE, LCount, RCount
 ReadEncoders:
   LE = IN15              ' Read and save state of encoders
   RE = IN14              ' Pin 15 is left encoder, pin 14 is the right encoder
@@ -236,4 +249,4 @@ ReadEncoders:
     RCount = RCount + 1
     LastRE = RE
   ENDIF
-RETURN
+  RETURN
