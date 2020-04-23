@@ -1,0 +1,239 @@
+' =========================================================================
+'   File...... MouseOdometry.BS2
+'   Purpose... Compares the mouse sensor against the wheel encoders.
+'   Author.... Martin Heermance
+'   E-mail.... mheermance@gmail.com
+'   Started... 2020 Apr 15
+'   Updated...
+'
+'   {$STAMP BS2e}
+'   {$PBASIC 2.5}
+' =========================================================================
+
+' -----[ Program Description ]---------------------------------------------
+'
+' This program monitors the Parallax Mouse Sensor Module to use it for robot
+' position feedback, while also moving the robot forward and backward to test
+' repeatability
+
+' -----[ Revision History ]------------------------------------------------
+'
+' 2020-04-15 Initial draft.
+
+' -----[ Configuration Constants ]-----------------------------------------
+
+#DEFINE USE_500DPI     ' Comment this out to use 1000 dpi, instead of 500 dpi.
+#DEFINE USE_DEBUG      ' Comment this out to use 38400 baud, instead of DEBUG.
+#DEFINE DO_XYQ_ONLY    ' Comment this out to dump all the registers, not just X,Y,Q.
+
+' -----[ I/O Definitions ]-------------------------------------------------
+LCD   PIN 9            ' LCD OUTPUT
+sclk  PIN 10           ' Serial clock pin to mouse sensor.
+sdio  PIN 11           ' Serial data I/O pin to mouse sensor.
+RMotor PIN 12          ' Pin for right servo
+LMotor PIN 13          ' Pin for left servo
+
+' -----[ Constants ]-------------------------------------------------------
+
+COM_SPEED CON 84       ' 9600 baud non-inverted.
+
+' Set the baud rate to 9600 if using DEBUG; else set it to 38400.
+
+#IF (USING_DEBUG) #THEN
+  #SELECT $STAMP
+    #CASE BS2, BS2E, BS2PE : baud CON 84
+    #CASE BS2SX, BS2P : baud CON 240
+    #CASE BS2PX : baud CON 396
+  #ENDSELECT
+#ELSE
+  #SELECT $stamp
+    #CASE BS2, BS2E, BS2PE : baud CON 6
+    #CASE BS2SX, BS2P : baud CON 45
+    #CASE BS2PX : baud CON 121
+  #ENDSELECT
+#ENDIF
+
+' Mouse sensor register addresses.
+
+DY    CON $02          ' Data register for current change in Y location.
+DX    CON $03          ' Data register for current change in X location.
+QLTY  CON $04          ' Data register for current image quality value.
+STAT  CON $16          ' Status register.
+CONF  CON $1B          ' Configuration register.
+
+LORES CON $80          ' Value to write to CONF for 500 dpi resolution.
+CHNG  CON $80          ' Bitmask for STAT to see if position changed.
+OFLOW CON $18          ' Bitmask for STAT to detect X/Y overflow.
+NEG   CON $80          ' Sign bit for DX and DY.
+
+MStop   CON 750     'Pulse width for the servos while stopped
+Speed100  CON 250   'This amount added or subtracted from stop makes the servos turn full speed
+
+' -----[ Variables ]---------------------------------------------------------
+
+addr  VAR Byte         ' Address value for mouse sensor register.
+i     VAR Byte         ' General counter.
+j     VAR Byte         ' Variable for use in FOR..NEXT LOOP
+dat   VAR Byte         ' Data value to/from mouse sensor register.
+sd    VAR Byte         ' Scratch register.
+q     VAR Byte         ' Quality value from mouse sensor.
+ovfl  VAR Byte         ' Overflow counter.
+
+x     VAR Word         ' Current cummulative X position.
+y     VAR Word         ' Current cummulative Y position.
+
+LE    VAR Bit          ' Storage for encoder reading
+RE    VAR Bit
+LastLE VAR Bit         ' Storage of last encoder reading
+LastRE VAR Bit
+LCount VAR Byte        ' Storage of total accumulation of encoder counts
+RCount VAR Byte
+PulseWidthRt VAR Word  ' Variables for pulse widths to servos
+PulseWidthLt VAR Word  ' these hold the duration value
+
+' -----[ Start of Main Program ]-----------------------------------------------------------
+
+LastLE = IN15          ' Preset a value for the last reading = to the resting value
+LastRE = IN14          ' Same for Right
+
+' Initialize clock
+LOW sclk
+
+PAUSE 100              ' Wait for mouse sensor to come out of reset.
+
+#IF (USE_500DPI) #THEN
+  addr = CONF          ' Change resolution to 500 dpi.
+  dat = LORES
+  GOSUB WriteAddr
+#ENDIF
+
+#IF (USE_DEBUG) #THEN
+  SEROUT LCD, COM_SPEED, ["?f"] ' Clear the screen if using DEBUG window.
+#ENDIF
+
+' Main program loop.
+
+DO
+  #IF (DO_XYQ_ONLY) #THEN
+    GOSUB DumpXYQ      'Use this to monitor X, Y, and Quality only.
+  #ELSE
+    GOSUB DumpALL      'Use this to dump all registers.
+  #ENDIF
+LOOP
+
+' -----[ Subroutines ]-------------------------------------------------------
+
+' DumpXYQ outputs X, Y, and Quality data to the programming port, for use with
+' either DEBUG or an external program.
+
+DumpXYQ:
+
+  addr = STAT
+  GOSUB ReadAddr
+  #IF (USE_DEBUG) #THEN
+    IF (dat & CHNG = 0) THEN
+      SEROUT LCD, COM_SPEED, ["?fx ", SDEC5 x, " y ", SDEC5 y, " quality ", DEC3 q]
+      RETURN
+    ELSEIF (dat & OFLOW) THEN
+      ovfl = 10
+    ENDIF
+  #ELSE
+    IF (dat & CHNG = 0) THEN
+      SEROUT 16, baud, ["x", SDEC x, " y", SDEC y, " q", DEC q, CR]
+      RETURN
+    ELSEIF (dat & OFLOW) THEN
+      SEROUT 16, baud, ["x", SDEC x, " y", SDEC y, " q999", CR]
+    ENDIF
+  #ENDIF
+  addr = DX
+  GOSUB ReadAddr
+  x = x + dat
+  IF (dat & NEG) THEN x = x + $ff00
+  addr = DY
+  GOSUB ReadAddr
+  y = y + dat
+  IF (dat & NEG) THEN y = y + $ff00
+  addr = QLTY
+  GOSUB ReadAddr
+  q = dat
+  #IF (USE_DEBUG) #THEN
+    SEROUT LCD, COM_SPEED, ["?fx: ", SDEC5 x, " y: ", SDEC5 y, " quality: ", DEC3 q]
+    IF (ovfl) THEN
+      ovfl = ovfl - 1
+      SEROUT LCD, COM_SPEED, [" OVERFLOW"]
+    ENDIF
+    SEROUT LCD, COM_SPEED, ["?l"]
+  #ELSE
+    SEROUT 16, baud, ["x", SDEC x, " y", SDEC y, " q", DEC q, CR]
+  #ENDIF
+  RETURN
+
+' DumpAll outputs the contents of all the sensor chip's registers.
+
+DumpAll:
+
+  SEROUT 16, baud, [HOME]
+  FOR addr = 0 TO $7f
+    GOSUB ReadAddr
+    IF (addr & 15 = 0) THEN SEROUT 16, baud, [HEX2 addr, ": "]
+    SEROUT 16, baud, [HEX2 dat]
+    IF (addr & 15 = 15) THEN
+      SEROUT 16, baud, [CR]
+    ELSEIF (addr & 7 = 7) THEN
+      SEROUT 16, baud, ["   "]
+    ELSE
+      SEROUT 16, baud, [" "]
+    ENDIF
+  NEXT
+  SEROUT 16, baud, [CR]
+  RETURN
+
+' ReadAddr reads a sensor chip register.
+'   Inputs:  addr = address ($00 - $7F) to read.
+'   Outputs: dat  = contents of the addressed register.
+
+ReadAddr:
+  SHIFTOUT sdio, sclk, MSBFIRST, [addr\8]
+  INPUT sdio
+  SHIFTIN sdio, sclk, MSBPOST, [dat\8]
+  RETURN
+
+WriteAddr:
+' WriteAddr writes data to a sensor chip register.
+'   Inputs:  addr = address ($00 - $7F) to write.
+'            dat  = data to write to the addressed register.
+  SHIFTOUT sdio, sclk, MSBFIRST, [addr|$80\8, dat\8]
+  RETURN
+
+Backward:
+  PulseWidthLt = MStop - Speed100  ' Set Speed to stop speed plus full speed
+  PulseWidthRt = MStop + Speed100  ' Same as above but minus for right servo to go forward
+  GOTO Move
+
+Forward:
+  PulseWidthLt = MStop + Speed100  ' Set Speed to stop speed plus full speed
+  PulseWidthRt = MStop - Speed100  ' Same as above but minus for right servo to go forward
+  GOTO Move
+
+Move:
+  FOR j = 1 TO 150                 ' Normal servo pulse loop
+    GOSUB ReadEncoders             ' Read the wheel encoders
+    IF LCount <= RCount THEN PULSOUT Lmotor, PulseWidthLt  ' Send pulse TO left
+    IF RCount <= LCount THEN PULSOUT Rmotor, PulseWidthRt  ' Send pulse TO right
+    PAUSE 15                       ' Pause until next pulse is needed
+  NEXT
+  RETURN
+
+' *** Subroutine for reading the encoders ***
+ReadEncoders:
+  LE = IN15              ' Read and save state of encoders
+  RE = IN14              ' Pin 15 is left encoder, pin 14 is the right encoder
+  IF LE <> LastLE THEN   ' If the current reading is not the same as the last reading then
+    LCount = LCount + 1  ' Add 1 to the total count
+    LastLE = LE          ' Save the state of the reading so we can compare on next loop
+  ENDIF
+  IF RE <> LastRE THEN   ' Do the same for the right side
+    RCount = RCount + 1
+    LastRE = RE
+  ENDIF
+RETURN
