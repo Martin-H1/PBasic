@@ -1,0 +1,485 @@
+' {$STAMP BS2}
+' {$PBASIC 2.0}
+
+'------------------------------------------------------------------
+'Name: commandmode.bs2
+'Desc: Command mode for ARobot Mobile Robot from Robotics.com
+'Lang: PBasic 2.0
+'CPU:  Basic Stamp II
+'Pgmr: Roger Arrick
+'Date: 12/21/2005
+'Vers: 2 - Set VER constant below too
+'Edit: 9
+'
+'Allows the ARobot to receive high-level commands from serial port.
+'Allows another controller to control all of ARobots devices including
+'drive motor, steering motor, beeper, LEDs, buttons, I/O, Etc.
+'
+'Connect a computer (PC or embedded) to ARobot's serial port
+'using 300 baud rate, N81.   Faster is a problem for BSII.
+'Use a straight through cable or serial wireless datalink.
+'
+'Command Syntax:
+' All text lower case.
+' First letter is ! to indicate new command.
+' Second letter is the controller ID, usually '1'.
+' Third letter is command such as l for LED control.
+' Other characters are possibly needed by the specific command
+'Commands return an 'a' for acknowledged, or an error code.
+'
+'Clarity trumps cleverness
+'
+'Example Commands:
+'   !1b1   = Beep once
+'   !1b2   = Beep twice
+'   !1b0   = Beep low (error beep)
+'   !1l10  = LED #1 off
+'   !1l11  = LED #1 on
+'   !1l20  = LED #2 off
+'   !1i1   = return input #1, (1=on, 0=off).  Pin 0-f
+'   !1ia   = return input #a
+'   !1o31  = output port 3, 1=on
+'   !1m11200e7  = Motor 1, 1=forward, 2=speed, 00E7=distance
+'   !1e    = return encoder count
+'   !1r380 = RC Servo control, #3, position 80 (00-FF)
+'   !1x    = Emergency stop everything, motors off, lights off, outs=0
+'   !1v    = Return version
+'   !10    = skip !1 for each command
+'   !1u    = return ultrasonic distance in inches, 2 chars.
+
+
+
+'------------------------------------------------------------------
+'Versions:
+'1.0 initial version given to Sara Rea
+'2.0 Added Ultrasonic command 'u'
+
+
+'------------------------------------------------------------------
+cid      CON  "1"                  'Controller ID.
+ver      CON  "2"                  'Program Version, 1 character.
+skipcp   VAR  Byte                 '0=normal, 1=skip command prefix.
+usc      CON  74                   'Ultrasonic conversion. 74 for inch, 29 for cm
+tmp1     VAR  Byte                 'Temp var.
+tmp2     VAR  Byte                 'Temp var.
+tmp3     VAR  Byte                 'Temp var.
+tmp4     VAR  Byte                 'Temp var.
+tmp5     VAR  Byte                 'Temp var.
+tmp6     VAR  Byte                 'Temp var.
+tmp7     VAR  Byte                 'Temp var.
+sonar    VAR  Word                 'Sonar result.
+cmdchar  VAR  Byte                 'Character from command stream.
+cmdbaud  CON  3313                 'Command stream baud rate. 300
+netbaud  CON  396                  'Coprocessor network baud. 2400
+whisker1 CON  0                    'Whisker Left.
+whisker2 CON  1                    'Whisker Right.
+netpin   CON  8                    'Coprocessor network pin.
+speaker  CON  9                    'Speaker.
+redled   CON  10                   'Red led.
+grnled   CON  11                   'Green led.
+jumper1  CON  12                   'Jumper 1.
+jumper2  CON  13                   'Jumper 2.
+button1  CON  14                   'Button 1.
+button2  CON  15                   'Button 2.
+console  CON  16                   'Console serial I/O.
+
+
+'------------------------------------------------------------------
+'Initialize
+start
+skipcp = 0                         '0 = don't skip command prefix.
+FREQOUT speaker,150,2000           '2 short beeps on power up.
+PAUSE 10
+FREQOUT speaker,150,2000
+LOW speaker                        'turn off speaker.
+
+
+
+'------------------------------------------------------------------
+'Receive commands and act accordingly.
+
+'Watching for command prefix !
+main
+
+'GOTO testit
+
+IF skipcp = 1 THEN main2            'Skip command prefix?
+SERIN console, cmdbaud, [cmdchar]   'Get first character.
+IF cmdchar <> "!" THEN main         'Wait for !
+
+'Watching for Controller ID.
+main1
+SERIN console, cmdbaud, [cmdchar]   'Get 2nd character.
+IF cmdchar = "!" THEN main1         'Is it another !
+IF cmdchar <> cid THEN main         'Match with Controller ID
+
+'Watching for commands.
+main2
+SERIN console, cmdbaud, [cmdchar]   'Get 3rd character.
+IF cmdchar = "x" THEN cmdx          'x = Emergency stop everything.
+IF cmdchar = "u" THEN cmdu          'u = Ultrasonic.
+IF cmdchar = "e" THEN cmde          'E = Encoder count.
+IF cmdchar = "o" THEN cmdo          'O = Output pin control.
+IF cmdchar = "i" THEN cmdi          'I = Input pin control.
+IF cmdchar = "b" THEN cmdb          'B = Beeper control.
+IF cmdchar = "m" THEN cmdm          'M = Motor control.
+IF cmdchar = "r" THEN cmdr          'R = RC Servo control.
+IF cmdchar = "l" THEN cmdl          'L = LED control.
+IF cmdchar = "v" THEN cmdv          'V = Version.
+IF cmdchar = "0" THEN cmd0          '0 = skip command prefix.
+IF cmdchar = "!" THEN main1         '! = restart.
+GOTO main
+
+'Bad command finish.
+cmdbad
+LOW speaker
+SEROUT console, cmdbaud, ["B"]
+GOTO main
+
+'Acknowledge command finish.  Return an "a".
+cmddone
+LOW speaker
+SEROUT console, cmdbaud, ["a"]
+GOTO main
+
+
+'------------------------------------------------------------------
+'Version
+cmdv
+SEROUT console, cmdbaud, [ver]       'Send version.
+GOTO cmddone
+
+
+'------------------------------------------------------------------
+'Output Control.
+cmdo
+SERIN console, cmdbaud, [tmp1]      'Get pin # 0 - f.
+SERIN console, cmdbaud, [tmp2]      'Get condition 1,0.
+tmp2=tmp2-48
+
+IF tmp1<>"0" THEN cmdo1
+OUTPUT 0
+OUT0 = tmp2
+GOTO cmddone
+cmdo1
+IF tmp1<>"1" THEN cmdo2
+OUTPUT 1
+OUT1 = tmp2
+GOTO cmddone
+cmdo2
+IF tmp1<>"2" THEN cmdo3
+OUTPUT 2
+OUT2 = tmp2
+GOTO cmddone
+cmdo3
+IF tmp1<>"3" THEN cmdo4
+OUTPUT 3
+OUT3 = tmp2
+GOTO cmddone
+cmdo4
+IF tmp1<>"4" THEN cmdo5
+OUTPUT 4
+OUT4 = tmp2
+GOTO cmddone
+cmdo5
+IF tmp1<>"5" THEN cmdo6
+OUTPUT 5
+OUT5 = tmp2
+GOTO cmddone
+cmdo6
+IF tmp1<>"6" THEN cmdo7
+OUTPUT 6
+OUT6 = tmp2
+GOTO cmddone
+cmdo7
+IF tmp1<>"7" THEN cmdo8
+OUTPUT 7
+OUT7 = tmp2
+GOTO cmddone
+cmdo8
+IF tmp1<>"8" THEN cmdo9
+OUTPUT 8
+OUT8 = tmp2
+GOTO cmddone
+cmdo9
+IF tmp1<>"9" THEN cmdoa
+OUTPUT 9
+OUT9 = tmp2
+GOTO cmddone
+cmdoa
+IF tmp1<>"a" THEN cmdob
+OUTPUT 10
+OUT10 = tmp2
+GOTO cmddone
+cmdob
+IF tmp1<>"b" THEN cmdoc
+OUTPUT 11
+OUT11 = tmp2
+GOTO cmddone
+cmdoc
+IF tmp1<>"c" THEN cmdod
+OUTPUT 12
+OUT12 = tmp2
+GOTO cmddone
+cmdod
+IF tmp1<>"d" THEN cmdoe
+OUTPUT 13
+OUT13 = tmp2
+GOTO cmddone
+cmdoe
+IF tmp1<>"e" THEN cmdof
+OUTPUT 14
+OUT14 = tmp2
+GOTO cmddone
+cmdof
+IF tmp1<>"f" THEN cmdox
+OUTPUT 15
+OUT15 = tmp2
+GOTO cmddone
+
+cmdox
+GOTO cmdbad
+
+
+'------------------------------------------------------------------
+'Return Encoder count
+cmde
+SEROUT netpin, netbaud, ["!1E1"]    'Send command to coprocessor
+SERIN netpin, netbaud, [tmp1]       'Get 1st hex char.
+SERIN netpin, netbaud, [tmp2]       'Get 2st hex char.
+SERIN netpin, netbaud, [tmp3]       'Get 3st hex char.
+SERIN netpin, netbaud, [tmp4]       'Get 4st hex char.
+SEROUT console, cmdbaud, [tmp1]     'Send 1st hex char.
+SEROUT console, cmdbaud, [tmp2]     'Send 2st hex char.
+SEROUT console, cmdbaud, [tmp3]     'Send 3st hex char.
+SEROUT console, cmdbaud, [tmp4]     'Send 4st hex char.
+GOTO cmddone
+
+
+'------------------------------------------------------------------
+'Skip command prefixes for future commands.
+cmd0
+skipcp = 1                          'Skip command prefix !1
+GOTO cmddone
+
+
+'------------------------------------------------------------------
+'Input command
+cmdi
+SERIN console, cmdbaud, [tmp1]      'Get pin # 0-f
+
+IF tmp1 <> "0" THEN cmdi1
+INPUT 0
+tmp2=IN0
+cmdi1
+IF tmp1 <> "1" THEN cmdi2
+INPUT 1
+tmp2=IN1
+GOTO cmdiz
+cmdi2
+IF tmp1 <> "2" THEN cmdi3
+INPUT 2
+tmp2=IN2
+GOTO cmdiz
+cmdi3
+IF tmp1 <> "3" THEN cmdi4
+INPUT 3
+tmp2=IN3
+GOTO cmdiz
+cmdi4
+IF tmp1 <> "4" THEN cmdi5
+INPUT 4
+tmp2=IN4
+GOTO cmdiz
+cmdi5
+IF tmp1 <> "5" THEN cmdi6
+INPUT 5
+tmp2=IN5
+GOTO cmdiz
+cmdi6
+IF tmp1 <> "6" THEN cmdi7
+INPUT 6
+tmp2=IN6
+GOTO cmdiz
+cmdi7
+IF tmp1 <> "7" THEN cmdi8
+INPUT 7
+tmp2=IN7
+GOTO cmdiz
+cmdi8
+IF tmp1 <> "8" THEN cmdi9
+INPUT 8
+tmp2=IN8
+GOTO cmdiz
+cmdi9
+IF tmp1 <> "9" THEN cmdia
+INPUT 9
+tmp2=IN9
+GOTO cmdiz
+cmdia
+IF tmp1 <> "a" THEN cmdib
+INPUT 10
+tmp2=IN10
+GOTO cmdiz
+cmdib
+IF tmp1 <> "b" THEN cmdic
+INPUT 11
+tmp2=IN11
+GOTO cmdiz
+cmdic
+IF tmp1 <> "c" THEN cmdid
+INPUT 12
+tmp2=IN12
+GOTO cmdiz
+cmdid
+IF tmp1 <> "d" THEN cmdie
+INPUT 13
+tmp2=IN13
+GOTO cmdiz
+cmdie
+IF tmp1 <> "e" THEN cmdif
+INPUT 14
+tmp2=IN14
+GOTO cmdiz
+cmdif
+IF tmp1 <> "f" THEN cmdix
+INPUT 15
+tmp2=IN15
+GOTO cmdiz
+cmdix
+GOTO cmdbad
+
+cmdiz
+tmp2=tmp2+48                         'Make 0/1 into ascii "0"/"1".
+SEROUT console, cmdbaud, [tmp2]      'Return 0=off (low), 1=on (off)
+GOTO cmddone
+
+
+'------------------------------------------------------------------
+'Motor Control !1M 1 D s dddd
+cmdm
+SERIN console, cmdbaud, [tmp1]      'Get Motor #.
+IF tmp1 = "2" THEN cmdm2
+
+'Motor 1
+SERIN console, cmdbaud, [tmp2]      'Get direction.
+SERIN console, cmdbaud, [tmp3]      'Get speed.
+SERIN console, cmdbaud, [tmp4]      'Get byte 1 of distance.
+SERIN console, cmdbaud, [tmp5]      'Get byte 2 of distance.
+SERIN console, cmdbaud, [tmp6]      'Get byte 3 of distance.
+SERIN console, cmdbaud, [tmp7]      'Get byte 4 of distance.
+SEROUT netpin, netbaud, ["!1M"]     'Send beginning cmd to co.
+SEROUT netpin, netbaud, [tmp1]      'Send motor # to co.
+SEROUT netpin, netbaud, [tmp2]      'Send direction to co.
+SEROUT netpin, netbaud, [tmp3]      'Send speed to co.
+SEROUT netpin, netbaud, [tmp4]      'Send distance byte 1 to co.
+SEROUT netpin, netbaud, [tmp5]      'Send distance byte 2 to co.
+SEROUT netpin, netbaud, [tmp6]      'Send distance byte 3 to co.
+SEROUT netpin, netbaud, [tmp7]      'Send distance byte 4 to co.
+GOTO cmddone
+
+'Motor 2
+cmdm2
+SERIN console, cmdbaud, [tmp2]      'Get control 0=off 1=fwd 2=rev.
+SEROUT netpin, netbaud, ["!1M"]     'Send beginning cmd to co.
+SEROUT netpin, netbaud, [tmp1]      'Send motor # to co.
+SEROUT netpin, netbaud, [tmp2]      'Send control char.
+GOTO cmddone
+
+
+'------------------------------------------------------------------
+'RC Servo Control
+cmdr
+SERIN console, cmdbaud, [tmp1]   'Get 4rd character.
+SERIN console, cmdbaud, [tmp2]   'Get 5rd character.
+SERIN console, cmdbaud, [tmp3]   'Get 6rd character.
+SEROUT netpin, netbaud, ["!1R"]  'Send RC command to coprocessor.
+SEROUT netpin, netbaud, [tmp1]   'Send Servo #
+SEROUT netpin, netbaud, [tmp2]   'Send byte #1 of position.
+SEROUT netpin, netbaud, [tmp3]   'Send byte #2 of position.
+SERIN  netpin, netbaud, [tmp1]   'Get response from coprocessor
+GOTO cmddone
+
+
+'------------------------------------------------------------------
+'LED Control
+cmdl
+SERIN console, cmdbaud, [cmdchar]   'Get 4rd character.
+IF cmdchar ="1" THEN cmdl1         'LED 1?
+IF cmdchar ="2" THEN cmdl2         'LED 2?
+GOTO cmdbad
+
+'LED #1 Red.
+cmdl1
+SERIN console, cmdbaud, [cmdchar]   'Get 5th character.
+IF cmdchar ="0" THEN cmdl11         'Off?
+LOW redled                          'On.
+GOTO cmddone
+cmdl11
+HIGH redled                         'Off.
+GOTO cmddone
+
+'LED #2 Green.
+cmdl2
+SERIN console, cmdbaud, [cmdchar]   'Get 5th character.
+IF cmdchar ="0" THEN cmdl21         'Off?
+LOW grnled                          'On.
+GOTO cmddone
+cmdl21
+HIGH grnled                         'Off.
+GOTO cmddone
+
+
+'------------------------------------------------------------------
+'Emergency stop everything
+cmdx
+HIGH redled
+HIGH grnled
+LOW speaker
+SEROUT netpin, netbaud, ["!1R100"]    'RC Servo 1 off.
+SERIN  netpin, netbaud, [tmp1]
+SEROUT netpin, netbaud, ["!1R200"]    'RC Servo 2 off.
+SERIN  netpin, netbaud, [tmp1]
+SEROUT netpin, netbaud, ["!1R300"]    'RC Servo 3 off.
+SERIN  netpin, netbaud, [tmp1]
+SEROUT netpin, netbaud, ["!1R400"]    'RC Servo 4 off.
+SERIN  netpin, netbaud, [tmp1]
+GOTO cmddone
+
+
+'------------------------------------------------------------------
+'Beeper control
+cmdb
+SERIN console, cmdbaud, [cmdchar]   'Get 4rd character.
+IF cmdchar <> "0" THEN cmdbb
+  FREQOUT speaker,400,900
+  FREQOUT speaker,600,600
+GOTO cmddone
+
+cmdbb
+cmdchar=cmdchar-48
+FOR tmp1=1 TO cmdchar
+  FREQOUT speaker,150,2000
+  PAUSE 10
+NEXT
+GOTO cmddone
+
+
+'------------------------------------------------------------------
+'Ultrasonic sensor - Devantech SRF04
+'uses P9 for Trigger pulse (overlap with beeper)
+'Uses P14 for Echo (overlap with SW2)
+'Returns 2 characters with the distance in inches.
+'Might need to add a loop to average 5 readings for better performance.
+
+cmdu
+PULSOUT 9,5                             '10us init pulse
+RCTIME 14,1,sonar
+sonar=sonar/usc                         'convert to inches or cm
+SEROUT console, cmdbaud, [DEC2 sonar]   'Return distance.
+GOTO cmddone
+
+
+
+'------------------------------------------------------------------
+END

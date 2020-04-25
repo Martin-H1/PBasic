@@ -1,0 +1,82 @@
+' {$STAMP BS2}
+                       '------------------------------------------------------------------
+'straight.bs2   3/29/99 Arrick Robotics www.robotics.com
+'
+'This program helps you adjust ARobot's steering linkage for
+'straight operation.
+'Download and run this program on your ARobot.
+'Press one of the push buttons (not reset).
+'ARobot will move forward about 10 feet then return.
+'Adjust the steering arms on ARobot and repeat this
+'proceedure until the robot moves straight.
+'------------------------------------------------------------------
+
+charn VAR Byte          'Get chars from coprocessor.
+net CON 8            'Coprocessor network pin.
+baud CON 396          'Coprocessor network baud rate.
+speaker CON 9          'Speaker pin.
+d1 VAR Word            'Distance.
+d2 VAR Word            'Distance.
+
+main:
+  GOSUB beep          'Beep.
+  d1=0            'Initialize variables.
+  d2=0
+
+main1:
+  IF IN14=0 THEN main2      'If button then start.
+  IF IN15=0 THEN main2
+  GOTO main1
+
+main2:
+  'Steering RC servo motor straight.
+  SEROUT net,baud,["!1R180"]
+  SERIN net,baud,[charn]
+
+  'Move robot forward.
+  SEROUT net,baud,["!1M11600F0"]  'Forward,speed=3,distance 10'.
+  SERIN net,baud,[charn]      'Get acknowledge char.
+  GOSUB stopped        'Wait until motor stopped.
+
+  'Wait.
+  PAUSE 1000
+
+  'Move robot back.
+  SEROUT net,baud,["!1M10600F0"]  'Reverse,speed=3,distance 10'.
+  SERIN net,baud,[charn]      'Get acknowledge char.
+  GOSUB stopped        'Wait until motor stopped.
+
+  'Restart program.
+  GOTO main
+
+
+'------------------------------------------------------------------
+'Wait until motor stops.  Returns when two count readings are the same.
+'
+stopped:
+  PAUSE 500          'Delay between reads.
+  SEROUT net,baud,["!1E1"]    'Get encoder count.
+  SERIN net,baud,[HEX4 d2]
+  IF d1 = d2 THEN stopped1    'If same then stopped.
+  d1=d2
+  GOTO stopped        'Loop.
+stopped1:
+  d1=0
+  d2=0
+  RETURN
+
+
+'------------------------------------------------------------------
+'Beep.
+'
+beep:
+  FREQOUT speaker,150,2000
+  PAUSE 10
+  FREQOUT speaker,150,2000
+  LOW speaker
+  RETURN
+
+
+'------------------------------------------------------------------
+'End of program
+'------------------------------------------------------------------

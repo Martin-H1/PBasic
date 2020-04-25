@@ -1,0 +1,122 @@
+' ==============================================================================
+'
+'   File...... AdvancedWallFollow.BSE
+'   Purpose... The robot performs an asymetric figure eight while playing a tune.
+'   Author.... Martin Heermance
+'   E-mail.... mheermance@gmail.com
+'   Started... 2014 September 1st
+'   Updated... 2014 September 1st
+'
+'   {$STAMP BS2}
+'   {$PBASIC 2.5}
+' ==============================================================================
+
+' ------------------------------------------------------------------------------
+' Program Description
+' ------------------------------------------------------------------------------
+' This program can be used with a robot to move in a figure eight while playing
+' a tune.
+
+' ------------------------------------------------------------------------------
+' Revision History
+' ------------------------------------------------------------------------------
+
+' Pin allocations.
+whisker1        PIN   0  ' Whisker Left.
+whisker2        PIN   1  ' Whisker Right.
+netpin          PIN   8  ' Coprocessor network pin.
+speaker         PIN   9  ' Speaker.
+redled          PIN  10  ' Red led.
+grnled          PIN  11  ' Green led.
+jumper1         PIN  12  ' Jumper 1.
+jumper2         PIN  13  ' Jumper 2.
+button1         PIN  14  ' Button 1.
+button2         PIN  15  ' Button 2.
+
+' These values need tweaking for each robot's servos.
+netbaud         CON 396  ' Coprocessor network baud. 2400
+
+notes DATA Word 2637, Word 2489, Word 2349, Word 2217, Word 2349, Word 2217,
+           Word 2093, Word 1975, Word 2637, Word 2489, Word 2349, Word 2217,
+           Word 2093, Word 2793, Word 2637, Word 2489, Word 2637, Word 2489,
+           Word 2349, Word 2217, Word 2039, Word 2217, Word 2349, Word 2489,
+           Word 2637, Word 2489, Word 2349, Word 2217, Word 2093, Word 2793,
+           Word 2637, Word 2489, Word 2637, Word 2489, Word 2349, Word 2217,
+           Word 2093, Word 2217, Word 2349, Word 2489, Word 2637, Word 2489,
+           Word 2349, Word 2217, Word 2349, Word 2217, Word 2093, Word 1975,
+           Word 2093, Word 2217, Word 2349, Word 2489, Word 2637, Word 2793,
+           Word 2637, Word 2489, Word 2637, Word 2489, Word 2349, Word 2217,
+           Word 2349, Word 2217, Word 2093, Word 1975, Word 2093, Word 2217,
+           Word 2349, Word 2489, Word 2637, Word 2960, Word 3136, Word 3322,
+           Word 3520, Word 3322, Word 3160, Word 2960, Word 2793, Word 3729,
+           Word 3520, Word 3322, Word 3520, Word 3322, Word 3160, Word 2960,
+           Word 2793, Word 2960, Word 3136, Word 3322, Word 3520, Word 3322,
+           Word 3160, Word 2960, Word 2793, Word 3729, Word 3520, Word 3322,
+           Word 3520, Word 3322, Word 3136, Word 2960, Word 2793, Word 2960,
+           Word 3136, Word 3322, Word 3520, Word 3322, Word 3160, Word 2960,
+           Word 3136, Word 2960, Word 3136, Word 2793, Word 2637, Word 2793,
+           Word 2960, Word 3136, Word 3322, Word 3520, Word 3729, Word 3520,
+           Word 3322, Word 3520, Word 3322, Word 3136, Word 2960, Word 3136,
+           Word 2960, Word 2793, Word 2637, Word 2793, Word 2960, Word 3136,
+           Word 3322, Word 3520, Word 3729, Word 3520, Word 3322, Word 3520,
+           Word 1760, Word 1661, Word 1760, Word 1661, Word 1760, Word 1661,
+           Word 1760, Word 3729, Word 1760, Word 3720, Word 1760, Word 3720,
+           Word 1760, Word 3720, Word 1760, Word 3720, Word 1760, Word 1661,
+           Word 1760, Word 1661, Word 1760, Word 1661, Word 1760, Word 1661,
+           Word 3729, Word 1760, Word 3720, Word 1760, Word 3720, Word 1760,
+           Word 3720, Word 1760, Word 3720, Word 1760, Word 0
+
+index           VAR Word
+duration        VAR Word
+encCount        VAR Word
+note            VAR Word
+position        VAR Byte
+ack             VAR Byte
+
+main:
+  DO UNTIL button1 = 0
+  LOOP
+
+  position = 60
+  GOSUB Steer
+  encCount = 295
+  GOSUB Move
+  GOSUB PlayBumble
+
+  position = 255
+  GOSUB Steer
+  encCount = 180
+  GOSUB Move
+  GOSUB PlayBumble
+
+  position = 128
+  GOSUB Steer
+  END
+
+'------------------------------------------------------------------
+'
+Move:
+  SEROUT netpin, netbaud, ["!1M115", HEX4 encCount] ' set steering servo position
+  SERIN  netpin, netbaud, [ack]       ' Get response from coprocessor
+  RETURN
+
+Steer:
+  SEROUT netpin, netbaud, ["!1R1", HEX2 position]  ' set steering servo position
+  SERIN  netpin, netbaud, [ack]       ' Get response from coprocessor
+  PAUSE 500
+  SEROUT netpin, netbaud, ["!1R100"]  ' turn servo off
+  SERIN  netpin, netbaud, [ack]       ' Get response from coprocessor
+  RETURN
+
+PlayBumble:
+  duration = 100
+  note = 1
+  index = 0
+
+  DO UNTIL note = 0
+    READ notes + index, Word note
+
+    index = index + 2
+    FREQOUT speaker, duration, note
+  LOOP
+  RETURN

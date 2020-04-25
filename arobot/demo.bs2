@@ -1,0 +1,343 @@
+'------------------------------------------------------------------
+'wander.bs2   3/28/99  Arrick Robotics  www.robotics.com
+'
+'This program is a simple object detection/avoidance routine.
+'It causes ARobot to drive forward until a front whisker is
+'activated.  It will then reverse and turn away from the object
+'then continue forward.
+'
+'------------------------------------------------------------------
+'Main Processor Pin Usage
+'
+'P0  left whisker (active low)
+'P1  right whisker (active low)
+'P2
+'P3
+'P4
+'P5
+'P6
+'P7
+'P8  network I/O
+'P9  speaker
+'P10 red LED
+'P11 green LED
+'P12 jumper #1
+'P13 jumper #2
+'P14 button #1 Green
+'P15 button #2 Red
+'
+'------------------------------------------------------------------
+'Controller Board I/O Usage.
+'
+'RC servo 1 = steering
+'RC servo 2 = unused
+'RC servo 3 = unused
+'RC servo 4 = unused
+'DC motor 1 = main drive motor
+'DC motor 2 = unused
+'
+'------------------------------------------------------------------
+'Variable Declarations
+'
+i VAR Byte        'counter.
+direction VAR Byte    'Direction. '1'=fwd, '0'=rev.
+motor VAR Byte      'motor #. '1' - '4'
+speed VAR Byte      'speed variable. '0' - '6'
+distance VAR Word      'motor distance/position variable.
+d VAR Word        'distance for travel comparison.
+char VAR Byte      'get chars from coprocessor.
+char1 VAR Byte      'get chars from coprocessor.
+char2 VAR Byte      'get chars from coprocessor.
+'
+'------------------------------------------------------------------
+'Constant Declarations
+'
+net CON 8        'coprocessor network pin.
+baud CON 396      'coprocessor network baud rate.
+speaker CON 9      'speaker pin.
+redled CON 10      'red led pin.
+grnled CON 11      'green led pin.
+'
+'------------------------------------------------------------------
+
+
+'******************************************************************
+'Start program.
+'******************************************************************
+'
+start:
+  GOSUB reset      'Initialize everything.
+start1:
+  IF IN14=0 THEN start2  'Wait for green button to start program.
+  GOTO start1
+
+  'Start program.
+start2:
+  GOSUB soundg    'Good sound.
+  PAUSE 1000      'Short delay.
+  GOTO eventloop    'Start responding to events.
+
+
+'------------------------------------------------------------------
+'Reset - initialize variables, motors, etc.
+'
+reset:
+  PAUSE 250        'Short break.
+  LOW speaker        'Speaker off.
+  HIGH redled        'turn off red led.
+  HIGH grnled        'turn off green led.
+  distance=1
+  direction=1        'Drive direction.
+  speed=4        'Drive motor speed.
+  GOSUB drives      'stop drive motor.
+  GOSUB steerl
+  GOSUB steerr
+  GOSUB steerc      'steering center.
+  GOSUB soundg      'good sound.
+  RETURN
+
+
+'------------------------------------------------------------------
+'Event loop - Checks whiskers and responds.
+'
+eventloop:
+
+  distance=65000      'Drive for a long time.
+  direction=1
+  GOSUB drive
+
+e1:
+  'Left whisker?
+  IF IN0=1 THEN e2
+  GOSUB lwhisker
+
+e2:
+  'Right whisker?
+  IF IN1=1 THEN e3
+  GOSUB rwhisker
+
+e3:
+  'Stop button?
+  IF IN15=1 THEN e4
+  GOTO start
+
+e4:
+  'You can put more events here.
+
+  GOTO e1        'Continue event loop.
+
+
+'------------------------------------------------------------------
+'EVENT - Left whisker.
+'
+lwhisker:
+  GOSUB drives      'stop drive motor.
+  GOSUB soundb      'Bad sound.
+  GOSUB steerl      'Wheels left.
+  distance=25
+  direction=0        'Reverse.
+  GOSUB drivew
+  IF IN0=1 THEN lwhisker1    'Whisker stuck?
+  GOSUB problem
+lwhisker1:
+  GOSUB steerc      'Wheels straight.
+  distance=65000      'Drive for a long time.
+  direction=1
+  GOSUB drive
+  RETURN
+
+
+'------------------------------------------------------------------
+'EVENT - right whisker.
+'
+rwhisker:
+
+  GOSUB drives      'stop drive motor.
+  GOSUB soundb      'Bad sound.
+  GOSUB steerr      'Wheels right.
+  distance=25
+  direction=0        'Reverse.
+  GOSUB drivew
+  IF IN1=1 THEN rwhisker1    'Whisker stuck?
+  GOSUB problem
+rwhisker1:
+  GOSUB steerc      'Wheels straight.
+  distance=65000      'Drive for a long time.
+  direction=1
+  GOSUB drive
+  RETURN
+
+
+'******************************************************************
+'Utilities
+'******************************************************************
+
+
+'------------------------------------------------------------------
+'Problem: trapped, whisker stuck, etc.
+'
+'Make sounds, wait for green button to continue.
+'
+problem:
+  LOW redled        'Red led on.
+  HIGH grnled        'Green led off
+  GOSUB soundb      'Bad sound.
+  GOSUB soundb
+  GOSUB soundb
+problem1:
+  IF IN14=1 THEN problem2    'Wait for green button
+  RETURN
+problem2:
+  PAUSE 100
+  TOGGLE redled      'Flash red led
+  GOTO problem1
+
+
+'******************************************************************
+'Sounds
+'******************************************************************
+
+
+'------------------------------------------------------------------
+'Good = two high pitched beeps.
+'
+soundg:
+  FREQOUT speaker,150,2000
+  PAUSE 10
+sound1:
+  'call here for only one beep.
+  FREQOUT speaker,150,2000
+  LOW speaker
+  RETURN
+
+
+'------------------------------------------------------------------
+'Bad = one low, then one lower pitch beeps.
+'
+soundb:
+  FREQOUT speaker,400,900
+  FREQOUT speaker,600,600
+  LOW speaker
+  RETURN
+
+
+'******************************************************************
+'Steering Subroutines
+'******************************************************************
+
+
+'------------------------------------------------------------------
+'Steer left.
+'
+steerl:
+  SEROUT net,baud,["!1R1FF"]  'RC servo #1, position=FF.
+  SERIN net,baud,[char]    'Get "A" back.
+
+steerf:
+  PAUSE 400        'Wait for servo to turn
+
+  'Steering motor off.
+  SEROUT net,baud,["!1R100"]  'RC Servo #1, position=00 (off).
+  SERIN net,baud,[char]    'Get "A".
+  RETURN
+
+
+'------------------------------------------------------------------
+'Steer center.
+'
+steerc:
+  SEROUT net,baud,["!1R180"]  'RC servo #1, position=80.
+  SERIN net,baud,[char]    'Get "A" back.
+  GOTO steerf        'Finish up.
+
+
+'------------------------------------------------------------------
+'Steer right.
+'
+steerr:
+  SEROUT net,baud,["!1R101"]  'RC servo #1, position=01.
+  SERIN net,baud,[char]    'Get "A" back.
+  GOTO steerf        'Finish up.
+
+
+'******************************************************************
+'Drive Motor Subroutines
+'******************************************************************
+
+
+'------------------------------------------------------------------
+'Turn right. Distance=amount of turn.  Wait until done.  At current speed.
+'
+driver:
+  GOSUB steerl      'Wheels left.
+  direction=0        'Reverse.
+  GOSUB drivew
+  GOSUB steerr      'Wheels right.
+  direction=1        'Forward.
+  GOSUB drivew
+  GOSUB steerc      'Steering straight.
+  RETURN
+
+
+'------------------------------------------------------------------
+'Turn left. Distance=amount of turn.  Wait until done.  At current speed.
+'
+drivel:
+  GOSUB steerr      'Wheels left.
+  direction=0        'Reverse.
+  GOSUB drivew
+  GOSUB steerl      'Wheels right.
+  direction=1        'Forward.
+  GOSUB drivew
+  GOSUB steerc      'Steering straight.
+  RETURN
+
+
+'------------------------------------------------------------------
+'Control the drive motor and wait until distance is traveled.
+'direction '1'=forward or '0'=backwards
+'speed = '0','1','2','3','4','5','6'  (0=off,6=full speed)
+'distance = '0000' to 'FFFF' distance to travel
+'
+drivew:
+  speed = speed | "0"
+  direction = direction | "0"
+  SEROUT net,baud,["!1M1", direction, speed, HEX4 distance]
+  SERIN net,baud,[char]      'Get "A" back.
+drivew1:
+  'wait till done.
+  PAUSE 50
+  SEROUT net,baud,["!1E1"]    'Ask for encoder count.
+  SERIN net,baud,[HEX4 d]      'Get 4 hex bytes.
+  IF d < distance THEN drivew1    'Loop until there.
+  PAUSE 500          'Delay to prevent crash.
+  RETURN
+
+
+'------------------------------------------------------------------
+'Control the drive motor without waiting until distance it traveled.
+'Direction '1'(forward) or '0'(backwards)
+'speed '0','1','2','3','4','5','6'  (0=off,6=full speed)
+'distance '0000' to 'FFFF' distance to travel
+'
+drive:
+  speed = speed | "0"
+  direction = direction | "0"
+  SEROUT net,baud,["!1M1", direction, speed, HEX4 distance]
+  SERIN net,baud,[char]      'Get "A" back.
+  RETURN
+
+
+'------------------------------------------------------------------
+'Stop motor
+'
+drives:
+  SEROUT net,baud,["!1M1100001"]  'Need a 1 in distance here.
+  SERIN net,baud,[char]      'Get "A" back.
+  PAUSE 500          'Delay.
+  RETURN
+
+
+'------------------------------------------------------------------
+'  End of Program
+'------------------------------------------------------------------

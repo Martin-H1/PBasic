@@ -1,0 +1,77 @@
+' {$STAMP BS2}
+                                                                       '------------------------------------------------------------------
+'getver.bs2   Arrick Robotics   www.robotics.com
+'
+'This program reads the coprocessor's version number
+'and causes the beeper to beep accordingly.
+'Here is an example version number:  1.2
+'In this case you will hear a single high-pitched beep
+'indicating the number to the left of the decimal point,
+'a single low-pitched beep indicating the decimal point,
+'then 2 high-pitched beeps indicating the number to the
+'right of the decimal point.
+'If the number right of the decimal point is 0 then
+'no beeps will be given.
+'Additionally, the version is sent to the serial port
+'for display.
+'------------------------------------------------------------------
+
+net CON 8          'coprocessor network pin.
+baud CON 396        'coprocessor network baud rate.
+speaker CON 9        'speaker pin.
+ldp VAR Byte        'left of decimal point.
+rdp VAR Byte        'right of decimal point.
+i VAR Byte          'beep counter.
+
+
+Start:
+  LOW speaker        'Speaker off.
+  PAUSE  500
+
+  SEROUT net,baud,["!1G"]    'Get version from co.
+  SERIN net,baud,[HEX2 ldp, HEX2 rdp]
+
+  'Display results.
+  SEROUT 16,84,["Coprocessor version: ",DEC ldp, ".", DEC rdp, 13]
+
+  FOR i=1 TO ldp      'Left of decimal point.
+    GOSUB hp
+  NEXT
+
+  PAUSE 300
+
+  GOSUB lp        'Decimal point.
+
+  PAUSE 300
+
+  IF rdp=0 THEN zero    'Right of decimal point.
+  FOR i=1 TO rdp
+    GOSUB hp
+  NEXT
+
+zero:
+  PAUSE 2000
+  GOTO start
+
+
+'------------------------------------------------------------------
+'high pitched beep.
+'
+hp:
+  FREQOUT speaker,150,2000
+  PAUSE 150
+  RETURN
+
+
+'------------------------------------------------------------------
+'low pitched beep.
+'
+lp:
+  FREQOUT speaker,400,600
+  RETURN
+
+
+
+'------------------------------------------------------------------
+'End of program.
+'------------------------------------------------------------------
